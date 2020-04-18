@@ -392,8 +392,15 @@ public final class JSONScanner extends JSONLexerBase {
             y3 = c3;
             M0 = c5;
             M1 = c6;
-            d0 = c8;
-            d1 = c9;
+
+            if (c9 == ' ') {
+                d0 = '0';
+                d1 = c8;
+                date_len = 9;
+            } else {
+                d0 = c8;
+                d1 = c9;
+            }
         } else if ((c4 == '-' && c6 == '-') // cn yyyy-m-dd
         ) {
             y0 = c0;
@@ -618,9 +625,11 @@ public final class JSONScanner extends JSONLexerBase {
                 if(t3 == '4' && t4 == '5') {
                     // handle some special timezones like xx:45
 
-                    if (t0 == '1' && t1 == '2') {
+                    if (t0 == '1' && (t1 == '2' || t1 == '3')) {
                         // NZ-CHAT          => +12:45
                         // Pacific/Chatham  => +12:45
+                        // NZ-CHAT          => +13:45 (DST)
+                        // Pacific/Chatham  => +13:45 (DST)
                     } else if (t0 == '0' && (t1 == '5' || t1 == '8')) {
                         // Asia/Kathmandu   => +05:45
                         // Asia/Katmandu    => +05:45
@@ -704,11 +713,7 @@ public final class JSONScanner extends JSONLexerBase {
         }
 
         if (calendar.getTimeZone().getRawOffset() != timeZoneOffset) {
-            String[] timeZoneIDs = TimeZone.getAvailableIDs(timeZoneOffset);
-            if (timeZoneIDs.length > 0) {
-                TimeZone timeZone = TimeZone.getTimeZone(timeZoneIDs[0]);
-                calendar.setTimeZone(timeZone);
-            }
+            calendar.setTimeZone(new SimpleTimeZone(timeZoneOffset, Integer.toString(timeZoneOffset)));
         }
     }
 
@@ -945,6 +950,10 @@ public final class JSONScanner extends JSONLexerBase {
             if (!charArrayCompare(text, bp, fieldName)) {
                 if (isWhitespace(ch)) {
                     next();
+
+                    while (isWhitespace(ch)) {
+                        next();
+                    }
                     continue;
                 }
                 matchStat = NOT_MATCH_NAME;
@@ -958,9 +967,15 @@ public final class JSONScanner extends JSONLexerBase {
 
         char ch = charAt(index++);
         if (ch != '"') {
-            matchStat = NOT_MATCH;
+            while (isWhitespace(ch)) {
+                ch = charAt(index++);
+            }
 
-            return stringDefaultValue();
+            if (ch != '"') {
+                matchStat = NOT_MATCH;
+
+                return stringDefaultValue();
+            }
         }
 
         final String strVal;
@@ -1163,17 +1178,36 @@ public final class JSONScanner extends JSONLexerBase {
     public long scanFieldSymbol(char[] fieldName) {
         matchStat = UNKNOWN;
 
-        if (!charArrayCompare(text, bp, fieldName)) {
-            matchStat = NOT_MATCH_NAME;
-            return 0;
+        for (;;) {
+            if (!charArrayCompare(text, bp, fieldName)) {
+                if (isWhitespace(ch)) {
+                    next();
+
+                    while (isWhitespace(ch)) {
+                        next();
+                    }
+                    continue;
+                }
+                matchStat = NOT_MATCH_NAME;
+                return 0;
+            } else {
+                break;
+            }
         }
 
         int index = bp + fieldName.length;
 
         char ch = charAt(index++);
         if (ch != '"') {
-            matchStat = NOT_MATCH;
-            return 0;
+            while (isWhitespace(ch)) {
+                ch = charAt(index++);
+            }
+
+            if (ch != '"') {
+                matchStat = NOT_MATCH;
+
+                return 0;
+            }
         }
 
         long hash = 0xcbf29ce484222325L;
@@ -1228,23 +1262,6 @@ public final class JSONScanner extends JSONLexerBase {
         }
 
         return hash;
-    }
-
-    public Collection<String> newCollectionByType(Class<?> type){
-        if (type.isAssignableFrom(HashSet.class)) {
-            HashSet<String> list = new HashSet<String>();
-            return list;
-        } else if (type.isAssignableFrom(ArrayList.class)) {
-            ArrayList<String> list2 = new ArrayList<String>();
-            return list2;
-        } else {
-            try {
-                Collection<String> list = (Collection<String>) type.newInstance();
-                return list;
-            } catch (Exception e) {
-                throw new JSONException(e.getMessage(), e);
-            }
-        }
     }
 
     @SuppressWarnings("unchecked")
@@ -2362,6 +2379,12 @@ public final class JSONScanner extends JSONLexerBase {
                     }
                     return;
                 }
+            }
+        }
+
+        for (int j = 0; j < bp; j++) {
+            if (j < text.length() && text.charAt(j) == ' ') {
+                i++;
             }
         }
 
