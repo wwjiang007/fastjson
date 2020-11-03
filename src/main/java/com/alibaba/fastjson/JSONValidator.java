@@ -1,10 +1,11 @@
 package com.alibaba.fastjson;
 
+import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.Reader;
 
-public abstract class JSONValidator implements Cloneable {
+public abstract class JSONValidator implements Cloneable, Closeable {
     public enum Type {
         Object, Array, Value
     }
@@ -15,7 +16,7 @@ public abstract class JSONValidator implements Cloneable {
     protected Type type;
 
     protected int count = 0;
-    protected boolean supportMultiValue = true;
+    protected boolean supportMultiValue = false;
 
     public static JSONValidator fromUtf8(byte[] jsonBytes) {
         return new UTF8Validator(jsonBytes);
@@ -33,7 +34,20 @@ public abstract class JSONValidator implements Cloneable {
         return new ReaderValidator(r);
     }
 
+    public boolean isSupportMultiValue() {
+        return supportMultiValue;
+    }
+
+    public JSONValidator setSupportMultiValue(boolean supportMultiValue) {
+        this.supportMultiValue = supportMultiValue;
+        return this;
+    }
+
     public Type getType() {
+        if (type == null) {
+            validate();
+        }
+
         return type;
     }
 
@@ -46,15 +60,18 @@ public abstract class JSONValidator implements Cloneable {
             }
 
             count++;
+            if (eof) {
+                return true;
+            }
 
-            if (supportMultiValue && !eof) {
+            if (supportMultiValue) {
                 skipWhiteSpace();
                 if (eof) {
                     break;
                 }
                 continue;
             } else {
-                break;
+                return false;
             }
         }
 
@@ -69,7 +86,11 @@ public abstract class JSONValidator implements Cloneable {
         switch (ch) {
             case '{':
                 next();
-                skipWhiteSpace();
+
+                while (isWhiteSpace(ch)) {
+                    next();
+                }
+
                 if (ch == '}') {
                     next();
                     type = Type.Object;
@@ -90,6 +111,7 @@ public abstract class JSONValidator implements Cloneable {
                         return false;
                     }
                     skipWhiteSpace();
+
                     if (!any()) {
                         return false;
                     }
@@ -191,6 +213,10 @@ public abstract class JSONValidator implements Cloneable {
             case '"':
                 next();
                 for (;;) {
+                    if (eof) {
+                        return false;
+                    }
+
                     if (ch == '\\') {
                         next();
                         if (ch == 'u') {
@@ -319,6 +345,36 @@ public abstract class JSONValidator implements Cloneable {
         }
     }
 
+    protected boolean string()
+    {
+        next();
+        for (; !eof; ) {
+            if (ch == '\\') {
+                next();
+
+                if (ch == 'u') {
+                    next();
+
+                    next();
+                    next();
+                    next();
+                    next();
+                } else {
+                    next();
+                }
+            }
+            else if (ch == '"') {
+                next();
+                return true;
+            }
+            else {
+                next();
+            }
+        }
+
+        return false;
+    }
+
     void skipWhiteSpace() {
         while (isWhiteSpace(ch)) {
             next();
@@ -438,6 +494,47 @@ public abstract class JSONValidator implements Cloneable {
                 ch = str.charAt(pos);
             }
         }
+
+        protected final void fieldName()
+        {
+            for (int i = pos + 1; i < str.length(); ++i) {
+                char ch = str.charAt(i);
+                if (ch == '\\') {
+                    break;
+                }
+                if (ch == '\"') {
+                    this.ch = str.charAt(i + 1);
+                    pos = i + 1;
+                    return;
+                }
+            }
+
+            next();
+            for (; ; ) {
+                if (ch == '\\') {
+                    next();
+
+                    if (ch == 'u') {
+                        next();
+
+                        next();
+                        next();
+                        next();
+                        next();
+                    } else {
+                        next();
+                    }
+                }
+                else if (ch == '"') {
+                    next();
+                    break;
+                }
+                else {
+                    next();
+                }
+            }
+        }
+
     }
 
     static class ReaderValidator extends JSONValidator {

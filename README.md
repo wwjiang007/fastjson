@@ -11,7 +11,7 @@
 Fastjson is a Java library that can be used to convert Java Objects into their JSON representation. It can also be used to convert a JSON string to an equivalent Java object. Fastjson can work with arbitrary Java objects including pre-existing objects that you do not have source-code of.
 
 ### Fastjson Goals
- * Provide best performance in server side and android client
+ * Provide the best performance on the server-side and android client
  * Provide simple toJSONString() and parseObject() methods to convert Java objects to JSON and vice-versa
  * Allow pre-existing unmodifiable objects to be converted to and from JSON
  * Extensive support of Java Generics
@@ -35,7 +35,7 @@ https://github.com/eishay/jvm-serializers/wiki
 - [maven][1]
 - [the latest JAR][2]
 
-[1]: http://repo1.maven.org/maven2/com/alibaba/fastjson/
+[1]: https://repo1.maven.org/maven2/com/alibaba/fastjson/
 [2]: https://search.maven.org/remote_content?g=com.alibaba&a=fastjson&v=LATEST
 
 ## Maven
@@ -44,7 +44,7 @@ https://github.com/eishay/jvm-serializers/wiki
 <dependency>
     <groupId>com.alibaba</groupId>
     <artifactId>fastjson</artifactId>
-    <version>1.2.61</version>
+    <version>1.2.73</version>
 </dependency>
 ```
 
@@ -52,21 +52,21 @@ https://github.com/eishay/jvm-serializers/wiki
 <dependency>
     <groupId>com.alibaba</groupId>
     <artifactId>fastjson</artifactId>
-    <version>1.1.71.android</version>
+    <version>1.1.72.android</version>
 </dependency>
 ```
 
 ## Gradle via JCenter
 
 ``` groovy
-compile 'com.alibaba:fastjson:1.2.61'
+compile 'com.alibaba:fastjson:1.2.73'
 ```
 
 ``` groovy
-compile 'com.alibaba:fastjson:1.1.71.android'
+compile 'com.alibaba:fastjson:1.1.72.android'
 ```
 
-Please see this [Wiki Download Page][Wiki] for more repository infos.
+Please see this [Wiki Download Page][Wiki] for more repository info.
 
 [Wiki]: https://github.com/alibaba/fastjson/wiki#download
 
@@ -75,11 +75,11 @@ Please see this [Wiki Download Page][Wiki] for more repository infos.
 Fastjson is released under the [Apache 2.0 license](license.txt).
 
 ```
-Copyright 1999-2019 Alibaba Group Holding Ltd.
+Copyright 1999-2020 Alibaba Group Holding Ltd.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
-You may obtain a copy of the License at following link.
+You may obtain a copy of the License at the following link.
 
      http://www.apache.org/licenses/LICENSE-2.0
 

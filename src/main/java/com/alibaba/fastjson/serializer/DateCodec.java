@@ -51,7 +51,7 @@ public class DateCodec extends AbstractDateDeserializer implements ObjectSeriali
         }
 
         Class<?> clazz = object.getClass();
-        if (clazz == java.sql.Date.class) {
+        if (clazz == java.sql.Date.class && !out.isEnabled(SerializerFeature.WriteDateUseDateFormat)) {
             long millis = ((java.sql.Date) object).getTime();
             TimeZone timeZone = serializer.timeZone;
             int offset = timeZone.getOffset(millis);
@@ -111,7 +111,13 @@ public class DateCodec extends AbstractDateDeserializer implements ObjectSeriali
         if (out.isEnabled(SerializerFeature.WriteDateUseDateFormat)) {
             DateFormat format = serializer.getDateFormat();
             if (format == null) {
-                format = new SimpleDateFormat(JSON.DEFFAULT_DATE_FORMAT, serializer.locale);
+                // 如果是通过FastJsonConfig进行设置，优先从FastJsonConfig获取
+                String dateFormatPattern = serializer.getFastJsonConfigDateFormatPattern();
+                if(dateFormatPattern == null) {
+                    dateFormatPattern = JSON.DEFFAULT_DATE_FORMAT;
+                }
+
+                format = new SimpleDateFormat(dateFormatPattern, serializer.locale);
                 format.setTimeZone(serializer.timeZone);
             }
             String text = format.format(date);
@@ -188,12 +194,22 @@ public class DateCodec extends AbstractDateDeserializer implements ObjectSeriali
                     IOUtils.getChars(year, 4, buf);
                 }
             }
-            
-            out.write(buf);
+
+
             if (nanos > 0) { // java.sql.Timestamp
+                int i = 0;
+                for (; i < 9; ++i) {
+                    int off = buf.length - i - 1;
+                    if (buf[off] != '0') {
+                        break;
+                    }
+                }
+                out.write(buf, 0, buf.length - i);
                 out.write(quote);
                 return;
             }
+
+            out.write(buf);
 
             float timeZoneF = calendar.getTimeZone().getOffset(calendar.getTimeInMillis()) / (3600.0f * 1000);
             int timeZone = (int)timeZoneF;
@@ -247,6 +263,10 @@ public class DateCodec extends AbstractDateDeserializer implements ObjectSeriali
                 return null;
             }
 
+            if (strVal.length() == 23 && strVal.endsWith(" 000")) {
+                strVal = strVal.substring(0, 19);
+            }
+
             {
                 JSONScanner dateLexer = new JSONScanner(strVal);
                 try {
@@ -263,9 +283,13 @@ public class DateCodec extends AbstractDateDeserializer implements ObjectSeriali
                     dateLexer.close();
                 }
             }
-            
-            if (strVal.length() == parser.getDateFomartPattern().length()
-                    || (strVal.length() == 22 && parser.getDateFomartPattern().equals("yyyyMMddHHmmssSSSZ"))) {
+
+            String dateFomartPattern = parser.getDateFomartPattern();
+            boolean formatMatch = strVal.length() == dateFomartPattern.length()
+                    || (strVal.length() == 22 && dateFomartPattern.equals("yyyyMMddHHmmssSSSZ"))
+                    || (strVal.indexOf('T') != -1 && dateFomartPattern.contains("'T'") && strVal.length() + 2 == dateFomartPattern.length())
+                    ;
+            if (formatMatch) {
                 DateFormat dateFormat = parser.getDateFormat();
                 try {
                     return (T) dateFormat.parse(strVal);

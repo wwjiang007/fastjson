@@ -7,6 +7,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
+import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONException;
 import com.alibaba.fastjson.PropertyNamingStrategy;
 import com.alibaba.fastjson.annotation.JSONCreator;
@@ -315,7 +316,23 @@ public class JavaBeanInfo {
 
         boolean isInterfaceOrAbstract = clazz.isInterface() || Modifier.isAbstract(clazz.getModifiers());
         if ((defaultConstructor == null && builderClass == null) || isInterfaceOrAbstract) {
-            creatorConstructor = getCreatorConstructor(constructors);
+
+            Type mixInType = JSON.getMixInAnnotations(clazz);
+            if (mixInType instanceof Class) {
+                Constructor<?>[] mixInConstructors = ((Class<?>) mixInType).getConstructors();
+                Constructor<?> mixInCreator = getCreatorConstructor(mixInConstructors);
+                if (mixInCreator != null) {
+                    try {
+                        creatorConstructor = clazz.getConstructor(mixInCreator.getParameterTypes());
+                    } catch (NoSuchMethodException e) {
+                        // skip
+                    }
+                }
+            }
+
+            if (creatorConstructor == null) {
+                creatorConstructor = getCreatorConstructor(constructors);
+            }
 
             if (creatorConstructor != null && !isInterfaceOrAbstract) { // 基于标记 JSONCreator 注解的构造方法
                 TypeUtils.setAccessible(creatorConstructor);
@@ -432,7 +449,7 @@ public class JavaBeanInfo {
                 String[] paramNames = null;
                 if (kotlin && constructors.length > 0) {
                     paramNames = TypeUtils.getKoltinConstructorParameters(clazz);
-                    creatorConstructor = TypeUtils.getKoltinConstructor(constructors, paramNames);
+                    creatorConstructor = TypeUtils.getKotlinConstructor(constructors, paramNames);
                     TypeUtils.setAccessible(creatorConstructor);
                 } else {
 
@@ -550,8 +567,7 @@ public class JavaBeanInfo {
                         add(fieldList, fieldInfo);
                     }
 
-                    if ((!kotlin)
-                            && !clazz.getName().equals("javax.servlet.http.Cookie")) {
+                    if ((!kotlin) && !clazz.getName().equals("javax.servlet.http.Cookie")) {
                         return new JavaBeanInfo(clazz, builderClass, null, creatorConstructor, null, null, jsonType, fieldList);
                     }
                 } else {
@@ -752,25 +768,58 @@ public class JavaBeanInfo {
 
             String propertyName;
             Field field = null;
+            // 用于存储KotlinBean中所有的get方法, 方便后续判断
+            List<String> getMethodNameList = null;
+
+            if (kotlin) {
+                getMethodNameList = new ArrayList();
+                for (int i = 0; i < methods.length; i++) {
+                    if (methods[i].getName().startsWith("get")) {
+                        getMethodNameList.add(methods[i].getName());
+                    }
+                }
+            }
+
             if (Character.isUpperCase(c3) //
                     || c3 > 512 // for unicode method name
                     ) {
-                if (TypeUtils.compatibleWithJavaBean) {
-                    propertyName = TypeUtils.decapitalize(methodName.substring(3));
+                // 这里本身的逻辑是通过setAbc这类方法名解析出成员变量名为abc或者Abc, 但是在kotlin中, isAbc, abc成员变量的set方法都是setAbc
+                // 因此如果是kotlin的话还需要进行不一样的判断, 判断的方式是通过get方法进行判断, isAbc的get方法名为isAbc(), abc的get方法名为getAbc()
+                if (kotlin) {
+                    String getMethodName = "g" + methodName.substring(1);
+                    propertyName = TypeUtils.getPropertyNameByMethodName(getMethodName);
                 } else {
-                    propertyName = Character.toLowerCase(methodName.charAt(3)) + methodName.substring(4);
-                }
-            } else if (c3 == '_') {
-                propertyName = methodName.substring(4);
-                field = TypeUtils.getField(clazz, propertyName, declaredFields);
-                if (field == null) {
-                    String temp = propertyName;
-                    propertyName = methodName.substring(3);
-                    field = TypeUtils.getField(clazz, propertyName, declaredFields);
-                    if (field == null) {
-                        propertyName = temp; //减少修改代码带来的影响
+                    if (TypeUtils.compatibleWithJavaBean) {
+                        propertyName = TypeUtils.decapitalize(methodName.substring(3));
+                    } else {
+                        propertyName = TypeUtils.getPropertyNameByMethodName(methodName);
                     }
                 }
+
+            } else if (c3 == '_') {
+                // 这里本身的逻辑是通过set_abc这类方法名解析出成员变量名为abc, 但是在kotlin中, is_abc和_abc成员变量的set方法都是set_abc
+                // 因此如果是kotlin的话还需要进行不一样的判断, 判断的方式是通过get方法进行判断, is_abc的get方法名为is_abc(), _abc的get方法名为get_abc()
+                if (kotlin) {
+                    String getMethodName = "g" + methodName.substring(1);
+                    if (getMethodNameList.contains(getMethodName)) {
+                        propertyName = methodName.substring(3);
+                    } else {
+                        propertyName = "is" + methodName.substring(3);
+                    }
+                    field = TypeUtils.getField(clazz, propertyName, declaredFields);
+                } else {
+                    propertyName = methodName.substring(4);
+                    field = TypeUtils.getField(clazz, propertyName, declaredFields);
+                    if (field == null) {
+                        String temp = propertyName;
+                        propertyName = methodName.substring(3);
+                        field = TypeUtils.getField(clazz, propertyName, declaredFields);
+                        if (field == null) {
+                            propertyName = temp; //减少修改代码带来的影响
+                        }
+                    }
+                }
+
             } else if (c3 == 'f') {
                 propertyName = methodName.substring(3);
             } else if (methodName.length() >= 5 && Character.isUpperCase(methodName.charAt(4))) {
@@ -848,6 +897,7 @@ public class JavaBeanInfo {
                         || AtomicLong.class == method.getReturnType() //
                         ) {
                     String propertyName;
+                    Field collectionField = null;
 
                     JSONField annotation = TypeUtils.getAnnotation(method, JSONField.class);
                     if (annotation != null && annotation.deserialize()) {
@@ -857,13 +907,18 @@ public class JavaBeanInfo {
                     if (annotation != null && annotation.name().length() > 0) {
                         propertyName = annotation.name();
                     } else {
-                        propertyName = Character.toLowerCase(methodName.charAt(3)) + methodName.substring(4);
+                        propertyName = TypeUtils.getPropertyNameByMethodName(methodName);
 
                         Field field = TypeUtils.getField(clazz, propertyName, declaredFields);
                         if (field != null) {
                             JSONField fieldAnnotation = TypeUtils.getAnnotation(field, JSONField.class);
                             if (fieldAnnotation != null && !fieldAnnotation.deserialize()) {
                                 continue;
+                            }
+
+                            if (Collection.class.isAssignableFrom(method.getReturnType())
+                                || Map.class.isAssignableFrom(method.getReturnType())) {
+                                collectionField = field;
                             }
                         }
                     }
@@ -877,7 +932,7 @@ public class JavaBeanInfo {
                         continue;
                     }
 
-                    add(fieldList, new FieldInfo(propertyName, method, null, clazz, type, 0, 0, 0, annotation, null, null, genericInfo));
+                    add(fieldList, new FieldInfo(propertyName, method, collectionField, clazz, type, 0, 0, 0, annotation, null, null, genericInfo));
                 }
             }
         }

@@ -57,8 +57,6 @@ public class SerializeConfig {
     private static boolean                                oracleJdbcError = false;
     private static boolean                                springfoxError  = false;
     private static boolean                                guavaError      = false;
-    private static boolean                                jsonnullError   = false;
-    private static boolean                                jsonobjectError = false;
     
     private static boolean                                jodaError       = false;
 
@@ -192,6 +190,12 @@ public class SerializeConfig {
 
                 Method method = fieldInfo.method;
                 if (method != null && !method.getReturnType().equals(fieldInfo.fieldClass)) {
+                    asm = false;
+                    break;
+                }
+
+                if (fieldInfo.fieldClass.isEnum()
+                        && get(fieldInfo.fieldClass) != EnumSerializer.instance) {
                     asm = false;
                     break;
                 }
@@ -439,25 +443,27 @@ public class SerializeConfig {
 	public ObjectSerializer getObjectWriter(Class<?> clazz, boolean create) {
         ObjectSerializer writer = get(clazz);
 
-        if (writer == null) {
-            try {
-                final ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
-                for (Object o : ServiceLoader.load(AutowiredObjectSerializer.class, classLoader)) {
-                    if (!(o instanceof AutowiredObjectSerializer)) {
-                        continue;
-                    }
-
-                    AutowiredObjectSerializer autowired = (AutowiredObjectSerializer) o;
-                    for (Type forType : autowired.getAutowiredFor()) {
-                        put(forType, autowired);
-                    }
-                }
-            } catch (ClassCastException ex) {
-                // skip
-            }
-
-            writer = get(clazz);
+        if (writer != null) {
+            return writer;
         }
+
+        try {
+            final ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
+            for (Object o : ServiceLoader.load(AutowiredObjectSerializer.class, classLoader)) {
+                if (!(o instanceof AutowiredObjectSerializer)) {
+                    continue;
+                }
+
+                AutowiredObjectSerializer autowired = (AutowiredObjectSerializer) o;
+                for (Type forType : autowired.getAutowiredFor()) {
+                    put(forType, autowired);
+                }
+            }
+        } catch (ClassCastException ex) {
+            // skip
+        }
+
+        writer = get(clazz);
 
         if (writer == null) {
             final ClassLoader classLoader = JSON.class.getClassLoader();
@@ -509,18 +515,46 @@ public class SerializeConfig {
             } else if (JSONStreamAware.class.isAssignableFrom(clazz)) {
                 put(clazz, writer = MiscCodec.instance);
             } else if (clazz.isEnum()) {
-                JSONType jsonType = TypeUtils.getAnnotation(clazz, JSONType.class);
+                Class mixedInType = (Class) JSON.getMixInAnnotations(clazz);
+
+                JSONType jsonType;
+                if (mixedInType != null) {
+                    jsonType = TypeUtils.getAnnotation(mixedInType, JSONType.class);
+                } else {
+                    jsonType = TypeUtils.getAnnotation(clazz, JSONType.class);
+                }
+
                 if (jsonType != null && jsonType.serializeEnumAsJavaBean()) {
                     put(clazz, writer = createJavaBeanSerializer(clazz));
                 } else {
-                    put(clazz, writer = EnumSerializer.instance);
+                    Member member = null;
+                    if (mixedInType != null) {
+                        Member mixedInMember = getEnumValueField(mixedInType);
+                        if (mixedInMember != null) {
+                            try {
+                                if (mixedInMember instanceof Method) {
+                                    Method mixedInMethod = (Method) mixedInMember;
+                                    member = clazz.getMethod(mixedInMethod.getName(), mixedInMethod.getParameterTypes());
+                                }
+                            } catch (Exception e) {
+                                // skip
+                            }
+                        }
+                    } else {
+                        member = getEnumValueField(clazz);
+                    }
+                    if (member != null) {
+                        put(clazz, writer = new EnumSerializer(member));
+                    } else {
+                        put(clazz, writer = getEnumSerializer());
+                    }
                 }
             } else if ((superClass = clazz.getSuperclass()) != null && superClass.isEnum()) {
                 JSONType jsonType = TypeUtils.getAnnotation(superClass, JSONType.class);
                 if (jsonType != null && jsonType.serializeEnumAsJavaBean()) {
                     put(clazz, writer = createJavaBeanSerializer(clazz));
                 } else {
-                    put(clazz, writer = EnumSerializer.instance);
+                    put(clazz, writer = getEnumSerializer());
                 }
             } else if (clazz.isArray()) {
                 Class<?> componentType = clazz.getComponentType();
@@ -691,24 +725,14 @@ public class SerializeConfig {
                     }
                 }
 
-                if ((!jsonnullError) && className.equals("net.sf.json.JSONNull")) {
-                    try {
-                        put(Class.forName("net.sf.json.JSONNull"), writer = MiscCodec.instance);
-                        return writer;
-                    } catch (ClassNotFoundException e) {
-                        // skip
-                        jsonnullError = true;
-                    }
+                if (className.equals("net.sf.json.JSONNull")) {
+                    put(clazz, writer = MiscCodec.instance);
+                    return writer;
                 }
                 
-				if (!jsonobjectError && className.equals("org.json.JSONObject")) {
-					try {
-						put(Class.forName("org.json.JSONObject"), writer = JSONObjectCodec.instance);
-						return writer;
-					} catch (ClassNotFoundException e) {
-						// skip
-						jsonobjectError = true;
-					}
+				if (className.equals("org.json.JSONObject")) {
+                    put(clazz, writer = JSONObjectCodec.instance);
+                    return writer;
 				}
 
                 if ((!jodaError) && className.startsWith("org.joda.")) {
@@ -746,6 +770,11 @@ public class SerializeConfig {
 
                 if ("org.javamoney.moneta.Money".equals(className)) {
                     put(clazz, writer = MonetaCodec.instance);
+                    return writer;
+                }
+
+                if ("com.google.protobuf.Descriptors$FieldDescriptor".equals(className)) {
+                    put(clazz, writer = ToStringSerializer.instance);
                     return writer;
                 }
 
@@ -799,6 +828,50 @@ public class SerializeConfig {
             }
         }
         return writer;
+    }
+
+    private static Member getEnumValueField(Class clazz) {
+        Member member = null;
+
+        Method[] methods = clazz.getMethods();
+
+        for (Method method : methods) {
+            if (method.getReturnType() == Void.class) {
+                continue;
+            }
+            JSONField jsonField = method.getAnnotation(JSONField.class);
+            if (jsonField != null) {
+                if (member != null) {
+                    return null;
+                }
+
+                member = method;
+            }
+        }
+
+        for (Field field : clazz.getFields()) {
+            JSONField jsonField = field.getAnnotation(JSONField.class);
+
+            if (jsonField != null) {
+                if (member != null) {
+                    return null;
+                }
+
+                member = field;
+            }
+        }
+
+        return member;
+    }
+
+    /**
+     * 可以通过重写这个方法，定义自己的枚举序列化实现
+     * @return 返回一个枚举的反序列化实现
+     * @author zhu.xiaojie
+     * @time 2020-4-5
+     */
+    protected ObjectSerializer getEnumSerializer(){
+        return EnumSerializer.instance;
     }
 	
     public final ObjectSerializer get(Type type) {
